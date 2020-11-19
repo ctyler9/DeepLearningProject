@@ -95,7 +95,7 @@ if __name__ == "__main__":
                         help="")
     parser.add_argument("--population_size", type=int, default=10,
                         help="")
-    parser.add_argument("--batch_size", type=int, default=20,
+    parser.add_argument("--batch_size", type=int, default=1,
                         help="")
 
     args = parser.parse_args()
@@ -107,6 +107,7 @@ if __name__ == "__main__":
     population_size = args.population_size
     batch_size = args.batch_size
     max_epoch = 20
+
     pathlib.Path('checkpoints').mkdir(exist_ok=True)
     checkpoint_str = "checkpoints/task-%03d.pth"
     population = mp.Queue(maxsize=population_size)
@@ -116,6 +117,7 @@ if __name__ == "__main__":
         population.put(dict(id=i, score=0))
     hyper_params = {'optimizer': ["lr", "momentum"], "batch_size": True}
     train_data_path = test_data_path = './data'
+
 
     train_data = MNIST(train_data_path, True, transforms.ToTensor(), download=True)
     test_data = MNIST(test_data_path, False, transforms.ToTensor(), download=True)
