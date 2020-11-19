@@ -1,22 +1,16 @@
-## SpaceInvaders imports
-import gym
-from torch_deep_q_model import DeepQNetwork, Agent
-from utils import plotLearning, get_optimizer, exploit_and_explore
-import numpy as np
-from gym import wrappers
-## Population Based Learning imports
 import argparse
 import os
 import pathlib
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.multiprocessing as _mp
-from torchvision.datasets import MNIST
 import torchvision.transforms as transforms
-from model import DeepQNetwork, Agent
-
+from space_invaders import *
+from utils import get_optimizer, exploit_and_explore
 
 mp = _mp.get_context('spawn')
+
 
 class Worker(mp.Process):
     def __init__(self, batch_size, epoch, max_epoch, train_data, test_data, population, finish_tasks,
@@ -28,9 +22,9 @@ class Worker(mp.Process):
         self.max_epoch = max_epoch
         self.batch_size = batch_size
         self.device = device
-        model = DeepQNetwork().to(device)
+        model = Agent().to(device)
         optimizer = get_optimizer(model)
-        self.trainer = Agent(model=model,
+        self.trainer = Trainer(model=model,
                                optimizer=optimizer,
                                loss_fn=nn.CrossEntropyLoss(),
                                train_data=train_data,
@@ -93,60 +87,45 @@ class Explorer(mp.Process):
                     self.population.put(task)
 
 
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Population Based Training")
+    parser.add_argument("--device", type=str, default='cuda',
+                        help="")
+    parser.add_argument("--population_size", type=int, default=10,
+                        help="")
+    parser.add_argument("--batch_size", type=int, default=20,
+                        help="")
 
-if __name__ == '__main__':
-    env = gym.make('SpaceInvaders-v0')
-    brain = Agent(gamma=0.95, epsilon=1.0,
-                  alpha=0.003, maxMemorySize=5000,
-                  replace=None)
-    while brain.memCntr < brain.memSize:
-        observation = env.reset()
-        done = False
-        while not done:
-            # 0 no action, 1 fire, 2 move right, 3 move left, 4 move right fire, 5 move left fire
-            action = env.action_space.sample()
-            observation_, reward, done, info = env.step(action)
-            if done and info['ale.lives'] == 0:
-                reward = -100
-            brain.storeTransition(np.mean(observation[15:200,30:125], axis=2), action, reward,
-                                np.mean(observation_[15:200,30:125], axis=2))
-            observation = observation_
-    print('done initializing memory')
+    args = parser.parse_args()
+    # mp.set_start_method("spawn")
+    mp = mp.get_context('forkserver')
+    device = args.device
+    if not torch.cuda.is_available():
+        device = 'cpu'
+    population_size = args.population_size
+    batch_size = args.batch_size
+    max_epoch = 20
+    pathlib.Path('checkpoints').mkdir(exist_ok=True)
+    checkpoint_str = "checkpoints/task-%03d.pth"
+    population = mp.Queue(maxsize=population_size)
+    finish_tasks = mp.Queue(maxsize=population_size)
+    epoch = mp.Value('i', 0)
+    for i in range(population_size):
+        population.put(dict(id=i, score=0))
+    hyper_params = {'optimizer': ["lr", "momentum"], "batch_size": True}
+    train_data_path = test_data_path = './data'
 
-    scores = []
-    epsHistory = []
-    numGames = 50
-    batch_size=32
-    # uncomment the line below to record every episode.
-    env = wrappers.Monitor(env, "tmp/space-invaders-1", video_callable=lambda episode_id: True, force=True)
-    for i in range(numGames):
-        print('starting game ', i+1, 'epsilon: %.4f' % brain.EPSILON)
-        epsHistory.append(brain.EPSILON)
-        done = False
-        observation = env.reset()
-        frames = [np.sum(observation[15:200,30:125], axis=2)]
-        score = 0
-        lastAction = 0
-        while not done:
-            if len(frames) == 3:
-                action = brain.chooseAction(frames)
-                frames = []
-            else:
-                action = lastAction
-            observation_, reward, done, info = env.step(action)
-            score += reward
-            frames.append(np.sum(observation_[15:200,30:125], axis=2))
-            if done and info['ale.lives'] == 0:
-                reward = -100
-            brain.storeTransition(np.mean(observation[15:200,30:125], axis=2), action, reward,
-                                  np.mean(observation_[15:200,30:125], axis=2))
-            observation = observation_
-            brain.learn(batch_size)
-            lastAction = action
-            #env.render(
-        scores.append(score)
-        print('score:',score)
-    x = [i+1 for i in range(numGames)]
-    fileName = str(numGames) + 'Games' + 'Gamma' + str(brain.GAMMA) + \
-               'Alpha' + str(brain.ALPHA) + 'Memory' + str(brain.memSize)+ '.png'
-    plotLearning(x, scores, epsHistory, fileName)
+    train_data = agent.train()
+    test_data = MNIST(test_data_path, False, transforms.ToTensor(), download=True)
+    workers = [Worker(batch_size, epoch, max_epoch, train_data, test_data, population, finish_tasks, device)
+               for _ in range(3)]
+    workers.append(Explorer(epoch, max_epoch, population, finish_tasks, hyper_params))
+    [w.start() for w in workers]
+    [w.join() for w in workers]
+    task = []
+    while not finish_tasks.empty():
+        task.append(finish_tasks.get())
+    while not population.empty():
+        task.append(population.get())
+    task = sorted(task, key=lambda x: x['score'], reverse=True)
+    print('best score on', task[0]['id'], 'is', task[0]['score'])
